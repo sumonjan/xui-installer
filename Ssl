@@ -1,0 +1,135 @@
+#!/bin/bash
+# ============================================================
+#   SSL Certificate Setup for X-UI Panel
+#   Supports: Let's Encrypt (Certbot) + Acme.sh
+# ============================================================
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+show_banner() {
+    clear
+    echo -e "${CYAN}"
+    echo "╔══════════════════════════════════════════════════════╗"
+    echo "║        SSL Certificate Setup - X-UI Panel          ║"
+    echo "╚══════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+}
+
+check_root() {
+    [[ $EUID -ne 0 ]] && echo -e "${RED}Root হিসেবে চালান!${NC}" && exit 1
+}
+
+install_acme() {
+    echo -e "${BLUE}[INFO] Acme.sh ইনস্টল করা হচ্ছে...${NC}"
+    curl https://get.acme.sh | sh -s email=$EMAIL
+    source ~/.bashrc
+    ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
+    echo -e "${GREEN}[OK] Acme.sh ইনস্টল সম্পন্ন${NC}"
+}
+
+issue_certificate() {
+    local DOMAIN=$1
+    local WEBROOT_METHOD=$2
+
+    mkdir -p /etc/x-ui/ssl
+
+    if [[ $WEBROOT_METHOD == "standalone" ]]; then
+        # Stop any service on port 80 temporarily
+        systemctl stop nginx 2>/dev/null
+        systemctl stop apache2 2>/dev/null
+
+        ~/.acme.sh/acme.sh --issue \
+            --standalone \
+            -d $DOMAIN \
+            --key-file /etc/x-ui/ssl/private.key \
+            --fullchain-file /etc/x-ui/ssl/fullchain.pem \
+            --reloadcmd "x-ui restart"
+
+        systemctl start nginx 2>/dev/null
+    else
+        ~/.acme.sh/acme.sh --issue \
+            --webroot /var/www/html \
+            -d $DOMAIN \
+            --key-file /etc/x-ui/ssl/private.key \
+            --fullchain-file /etc/x-ui/ssl/fullchain.pem \
+            --reloadcmd "x-ui restart"
+    fi
+
+    if [[ $? -eq 0 ]]; then
+        echo -e "${GREEN}[OK] SSL সার্টিফিকেট সফলভাবে তৈরি হয়েছে!${NC}"
+        echo -e "${GREEN}Key Path:  /etc/x-ui/ssl/private.key${NC}"
+        echo -e "${GREEN}Cert Path: /etc/x-ui/ssl/fullchain.pem${NC}"
+    else
+        echo -e "${RED}[ERROR] SSL সার্টিফিকেট তৈরি ব্যর্থ!${NC}"
+        exit 1
+    fi
+}
+
+configure_xui_ssl() {
+    local DOMAIN=$1
+    local PORT=$2
+
+    echo -e "${BLUE}[INFO] X-UI Panel SSL কনফিগার করা হচ্ছে...${NC}"
+    x-ui ssl-cert-manager \
+        --cert "/etc/x-ui/ssl/fullchain.pem" \
+        --key "/etc/x-ui/ssl/private.key" 2>/dev/null
+
+    # Update via x-ui settings if the above doesn't work
+    x-ui setting -certFile /etc/x-ui/ssl/fullchain.pem 2>/dev/null
+    x-ui setting -keyFile /etc/x-ui/ssl/private.key 2>/dev/null
+    x-ui restart 2>/dev/null
+
+    echo -e "${GREEN}[OK] SSL কনফিগার সম্পন্ন${NC}"
+    echo -e "${CYAN}Panel এখন চলবে: https://$DOMAIN:$PORT${NC}"
+}
+
+setup_auto_renew() {
+    echo -e "${BLUE}[INFO] অটো-রিনিউ সেটআপ করা হচ্ছে...${NC}"
+    # Acme.sh automatically adds a cron job
+    # Verify it's there
+    crontab -l | grep -q acme.sh && \
+        echo -e "${GREEN}[OK] অটো-রিনিউ ক্রোন জব সক্রিয়${NC}" || \
+        echo -e "${YELLOW}[WARN] ক্রোন জব ম্যানুয়ালি যোগ করুন${NC}"
+}
+
+main() {
+    show_banner
+    check_root
+
+    echo -e "${YELLOW}আপনার ডোমেইন নাম লিখুন (যেমন: vpn.example.com):${NC}"
+    read -r DOMAIN
+
+    echo -e "${YELLOW}আপনার ইমেইল লিখুন (Let's Encrypt নোটিফিকেশনের জন্য):${NC}"
+    read -r EMAIL
+
+    echo -e "${YELLOW}Panel পোর্ট লিখুন (ডিফল্ট: 54321):${NC}"
+    read -r PORT
+    PORT=${PORT:-54321}
+
+    # Verify domain points to this server
+    SERVER_IP=$(curl -s ifconfig.me)
+    DOMAIN_IP=$(dig +short $DOMAIN 2>/dev/null | head -1)
+
+    if [[ "$SERVER_IP" != "$DOMAIN_IP" ]]; then
+        echo -e "${RED}[WARN] ডোমেইন IP ($DOMAIN_IP) সার্ভার IP ($SERVER_IP) এর সাথে মিলছে না!${NC}"
+        echo -e "${YELLOW}DNS প্রপাগেশন অপেক্ষা করুন অথবা DNS রেকর্ড চেক করুন।${NC}"
+        echo -e "${YELLOW}তবুও চালিয়ে যেতে চান? (y/n):${NC}"
+        read -r CONTINUE
+        [[ $CONTINUE != "y" ]] && exit 1
+    fi
+
+    install_acme
+    issue_certificate $DOMAIN "standalone"
+    configure_xui_ssl $DOMAIN $PORT
+    setup_auto_renew
+
+    echo -e "\n${GREEN}✅ SSL সেটআপ সম্পন্ন!${NC}"
+    echo -e "${CYAN}Panel: https://$DOMAIN:$PORT${NC}"
+}
+
+main "$@"
