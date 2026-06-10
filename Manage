@@ -1,189 +1,278 @@
 #!/bin/bash
-# ============================================================
-#   X-UI Panel Management Script
-#   Manage: Start/Stop/Restart/Status/Backup/Update
-# ============================================================
+# ================================================================
+#   X-UI PRO — Management Menu
+# ================================================================
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-WHITE='\033[1;37m'
-NC='\033[0m'
+R='\033[0;31m'; G='\033[0;32m'; Y='\033[1;33m'
+B='\033[0;34m'; C='\033[0;36m'; W='\033[1;37m'; N='\033[0m'
 
-show_menu() {
+ok()   { echo -e "${G}  [✔] $1${N}"; }
+info() { echo -e "${B}  [•] $1${N}"; }
+err()  { echo -e "${R}  [✘] $1${N}"; }
+
+menu() {
     clear
-    echo -e "${CYAN}"
-    echo "╔══════════════════════════════════════════════════════╗"
-    echo "║         X-UI Panel Management Menu                  ║"
-    echo "╠══════════════════════════════════════════════════════╣"
-    echo "║  [1] Panel চালু করুন (Start)                        ║"
-    echo "║  [2] Panel বন্ধ করুন (Stop)                         ║"
-    echo "║  [3] Panel রিস্টার্ট করুন (Restart)                ║"
-    echo "║  [4] Panel স্ট্যাটাস দেখুন (Status)                ║"
-    echo "║  [5] Panel আপডেট করুন (Update)                     ║"
-    echo "║  [6] Panel আনইনস্টল করুন (Uninstall)               ║"
-    echo "║  [7] ব্যাকআপ নিন (Backup)                          ║"
-    echo "║  [8] ব্যাকআপ রিস্টোর করুন (Restore)               ║"
-    echo "║  [9] ইনবাউন্ড পরিসংখ্যান (Statistics)              ║"
-    echo "║  [10] সিস্টেম অপটিমাইজ করুন (Optimize)            ║"
-    echo "║  [11] পোর্ট পরিবর্তন করুন (Change Port)            ║"
-    echo "║  [12] পাসওয়ার্ড পরিবর্তন করুন (Change Password)   ║"
-    echo "║  [0] বাহির (Exit)                                   ║"
-    echo "╚══════════════════════════════════════════════════════╝"
-    echo -e "${NC}"
+    SERVER_IP=$(curl -s --connect-timeout 3 ifconfig.me 2>/dev/null)
+    echo -e "${C}"
+    echo "╔════════════════════════════════════════════════════════════╗"
+    echo "║              X-UI PRO — Management Menu                   ║"
+    printf "║  Server: %-51s║\n" "$SERVER_IP"
+    echo "╠════════════════════════════════════════════════════════════╣"
+    echo "║  [1]  Panel চালু করুন          (Start)                   ║"
+    echo "║  [2]  Panel বন্ধ করুন          (Stop)                    ║"
+    echo "║  [3]  Panel রিস্টার্ট          (Restart)                 ║"
+    echo "║  [4]  Panel স্ট্যাটাস          (Status)                  ║"
+    echo "║  [5]  Panel আপডেট              (Update)                  ║"
+    echo "╠════════════════════════════════════════════════════════════╣"
+    echo "║  [6]  নতুন User তৈরি করুন      (Add User + Config)       ║"
+    echo "║  [7]  Config Links দেখুন        (Show Configs)            ║"
+    echo "║  [8]  Inbound লিস্ট দেখুন      (List Inbounds)           ║"
+    echo "╠════════════════════════════════════════════════════════════╣"
+    echo "║  [9]  ব্যাকআপ নিন              (Backup)                  ║"
+    echo "║  [10] পোর্ট পরিবর্তন           (Change Port)             ║"
+    echo "║  [11] পাসওয়ার্ড পরিবর্তন      (Change Password)         ║"
+    echo "║  [12] সিস্টেম তথ্য দেখুন       (System Info)             ║"
+    echo "║  [0]  বাহির                     (Exit)                    ║"
+    echo "╚════════════════════════════════════════════════════════════╝"
+    echo -e "${N}"
 }
 
-start_panel() {
-    systemctl start x-ui
-    echo -e "${GREEN}[OK] X-UI Panel চালু হয়েছে${NC}"
+# ── Panel Login ──────────────────────────────────────────────────
+do_login() {
+    # Read saved config
+    SAVED_PORT=$(x-ui setting 2>/dev/null | grep -i port | grep -oP '\d+' | head -1)
+    PANEL_PORT=${SAVED_PORT:-2053}
+    PANEL_USER="admin"
+    PANEL_PASS="admin@1234"
+    COOKIE="/tmp/xui_mgmt.txt"
+    rm -f "$COOKIE"
+
+    for BASE in "http://127.0.0.1:${PANEL_PORT}" "http://127.0.0.1:${PANEL_PORT}"; do
+        RESP=$(curl -s -c "$COOKIE" \
+            -X POST "${BASE}/login" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            --connect-timeout 8 \
+            -d "username=${PANEL_USER}&password=${PANEL_PASS}" 2>/dev/null)
+        if echo "$RESP" | grep -q '"success":true'; then
+            PANEL_BASE="$BASE"
+            return 0
+        fi
+    done
+    return 1
 }
 
-stop_panel() {
-    systemctl stop x-ui
-    echo -e "${YELLOW}[OK] X-UI Panel বন্ধ হয়েছে${NC}"
-}
-
-restart_panel() {
-    systemctl restart x-ui
-    echo -e "${GREEN}[OK] X-UI Panel রিস্টার্ট হয়েছে${NC}"
-}
-
-status_panel() {
-    echo -e "${BLUE}=== X-UI Service Status ===${NC}"
-    systemctl status x-ui --no-pager
+# ── Add New User with Config ─────────────────────────────────────
+add_user() {
+    clear
+    echo -e "${W}═══ নতুন User তৈরি ═══${N}"
     echo ""
-    echo -e "${BLUE}=== নেটওয়ার্ক পোর্ট ===${NC}"
-    ss -tlnp | grep -E "(xray|x-ui)" 2>/dev/null || netstat -tlnp | grep -E "(xray|x-ui)" 2>/dev/null
-    echo ""
-    echo -e "${BLUE}=== সিস্টেম রিসোর্স ===${NC}"
-    echo "CPU Usage: $(top -bn1 | grep "Cpu(s)" | awk '{print $2}')%"
-    echo "Memory: $(free -h | awk '/Mem/{print $3"/"$2}')"
-    echo "Disk: $(df -h / | awk 'NR==2{print $3"/"$2" ("$5" used)"}')"
-}
+    echo -e "${Y}User এর নাম/email লিখুন:${N}"
+    read -r UNAME
+    echo -e "${Y}কোন Protocol? (1=VLESS  2=VMess  3=Trojan  4=সবগুলো):${N}"
+    read -r PROTO
 
-update_panel() {
-    echo -e "${BLUE}[INFO] X-UI আপডেট করা হচ্ছে...${NC}"
-    x-ui update 2>/dev/null || bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)
-    echo -e "${GREEN}[OK] আপডেট সম্পন্ন${NC}"
-}
-
-uninstall_panel() {
-    echo -e "${RED}[WARN] আপনি কি সত্যিই আনইনস্টল করতে চান? (yes/no):${NC}"
-    read -r CONFIRM
-    if [[ $CONFIRM == "yes" ]]; then
-        x-ui uninstall 2>/dev/null
-        systemctl stop x-ui 2>/dev/null
-        systemctl disable x-ui 2>/dev/null
-        rm -rf /usr/local/x-ui
-        rm -f /etc/systemd/system/x-ui.service
-        systemctl daemon-reload
-        echo -e "${GREEN}[OK] X-UI আনইনস্টল সম্পন্ন${NC}"
+    info "Panel Login হচ্ছে..."
+    if ! do_login; then
+        err "Login ব্যর্থ! Panel চলছে কিনা চেক করুন: systemctl status x-ui"
+        return
     fi
+
+    SERVER_IP=$(curl -s --connect-timeout 5 ifconfig.me)
+
+    # Get existing inbound list
+    INBOUNDS=$(curl -s -b "$COOKIE" "${PANEL_BASE}/xui/inbound/list" 2>/dev/null)
+
+    generate_user_config() {
+        local PROTOCOL="$1"
+        local IB_ID IB_PORT UUID NEW_PASS VMESS_JSON LINK
+
+        # Find matching inbound
+        IB_ID=$(echo "$INBOUNDS" | python3 -c "
+import json,sys
+data=json.load(sys.stdin)
+for o in data.get('obj',[]):
+    if o.get('protocol','').lower() == '$PROTOCOL'.lower():
+        print(o.get('id',''))
+        break
+" 2>/dev/null)
+
+        IB_PORT=$(echo "$INBOUNDS" | python3 -c "
+import json,sys
+data=json.load(sys.stdin)
+for o in data.get('obj',[]):
+    if o.get('protocol','').lower() == '$PROTOCOL'.lower():
+        print(o.get('port',''))
+        break
+" 2>/dev/null)
+
+        WS_PATH=$(echo "$INBOUNDS" | python3 -c "
+import json,sys
+data=json.load(sys.stdin)
+for o in data.get('obj',[]):
+    if o.get('protocol','').lower() == 'vmess':
+        ss=json.loads(o.get('streamSettings','{}')) if isinstance(o.get('streamSettings'),str) else o.get('streamSettings',{})
+        print(ss.get('wsSettings',{}).get('path','/ws'))
+        break
+" 2>/dev/null)
+
+        if [[ -z "$IB_ID" ]]; then
+            warn "$PROTOCOL inbound পাওয়া যায়নি — Panel এ আগে Inbound তৈরি করুন"
+            return
+        fi
+
+        UUID=$(cat /proc/sys/kernel/random/uuid)
+        NEW_PASS=$(cat /proc/sys/kernel/random/uuid | tr -d '-' | head -c 20)
+
+        case $PROTOCOL in
+            vless)
+                PAYLOAD="{\"id\":${IB_ID},\"settings\":{\"clients\":[{\"id\":\"${UUID}\",\"flow\":\"\",\"email\":\"${UNAME}\",\"limitIp\":0,\"totalGB\":0,\"expiryTime\":0,\"enable\":true,\"tgId\":\"\",\"subId\":\"\"}]}}"
+                RESP=$(curl -s -b "$COOKIE" -X POST "${PANEL_BASE}/xui/inbound/addClient" \
+                    -H "Content-Type: application/json" --connect-timeout 10 -d "$PAYLOAD" 2>/dev/null)
+                if echo "$RESP" | grep -q '"success":true'; then
+                    LINK="vless://${UUID}@${SERVER_IP}:${IB_PORT}?type=tcp&security=none#${UNAME}-VLESS"
+                    echo -e "${G}  ✅ VLESS Config:${N}"
+                    echo -e "${C}     UUID : $UUID${N}"
+                    echo -e "${C}     Link : $LINK${N}"
+                    echo "" >> /root/vpn-configs.txt
+                    echo "[User: $UNAME] VLESS" >> /root/vpn-configs.txt
+                    echo "$LINK" >> /root/vpn-configs.txt
+                fi
+                ;;
+            vmess)
+                PAYLOAD="{\"id\":${IB_ID},\"settings\":{\"clients\":[{\"id\":\"${UUID}\",\"alterId\":0,\"email\":\"${UNAME}\",\"limitIp\":0,\"totalGB\":0,\"expiryTime\":0,\"enable\":true,\"tgId\":\"\",\"subId\":\"\"}]}}"
+                RESP=$(curl -s -b "$COOKIE" -X POST "${PANEL_BASE}/xui/inbound/addClient" \
+                    -H "Content-Type: application/json" --connect-timeout 10 -d "$PAYLOAD" 2>/dev/null)
+                if echo "$RESP" | grep -q '"success":true'; then
+                    VMESS_JSON="{\"v\":\"2\",\"ps\":\"${UNAME}-VMess\",\"add\":\"${SERVER_IP}\",\"port\":\"${IB_PORT}\",\"id\":\"${UUID}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"\",\"path\":\"${WS_PATH:-/ws}\",\"tls\":\"\"}"
+                    LINK="vmess://$(echo -n "$VMESS_JSON" | base64 -w 0)"
+                    echo -e "${G}  ✅ VMess Config:${N}"
+                    echo -e "${C}     UUID : $UUID${N}"
+                    echo -e "${C}     Link : $LINK${N}"
+                    echo "" >> /root/vpn-configs.txt
+                    echo "[User: $UNAME] VMess" >> /root/vpn-configs.txt
+                    echo "$LINK" >> /root/vpn-configs.txt
+                fi
+                ;;
+            trojan)
+                PAYLOAD="{\"id\":${IB_ID},\"settings\":{\"clients\":[{\"password\":\"${NEW_PASS}\",\"email\":\"${UNAME}\",\"limitIp\":0,\"totalGB\":0,\"expiryTime\":0,\"enable\":true,\"tgId\":\"\",\"subId\":\"\"}]}}"
+                RESP=$(curl -s -b "$COOKIE" -X POST "${PANEL_BASE}/xui/inbound/addClient" \
+                    -H "Content-Type: application/json" --connect-timeout 10 -d "$PAYLOAD" 2>/dev/null)
+                if echo "$RESP" | grep -q '"success":true'; then
+                    LINK="trojan://${NEW_PASS}@${SERVER_IP}:${IB_PORT}?security=none&type=tcp#${UNAME}-Trojan"
+                    echo -e "${G}  ✅ Trojan Config:${N}"
+                    echo -e "${C}     Pass : $NEW_PASS${N}"
+                    echo -e "${C}     Link : $LINK${N}"
+                    echo "" >> /root/vpn-configs.txt
+                    echo "[User: $UNAME] Trojan" >> /root/vpn-configs.txt
+                    echo "$LINK" >> /root/vpn-configs.txt
+                fi
+                ;;
+        esac
+    }
+
+    case $PROTO in
+        1) generate_user_config "vless" ;;
+        2) generate_user_config "vmess" ;;
+        3) generate_user_config "trojan" ;;
+        4)
+            generate_user_config "vless"
+            echo ""
+            generate_user_config "vmess"
+            echo ""
+            generate_user_config "trojan"
+            ;;
+        *) err "অবৈধ পছন্দ" ;;
+    esac
+
+    echo ""
+    ok "Config /root/vpn-configs.txt এ সেভ হয়েছে"
 }
 
-backup_panel() {
-    BACKUP_DIR="/root/xui-backup"
-    BACKUP_FILE="$BACKUP_DIR/xui-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
-    mkdir -p $BACKUP_DIR
-
-    tar -czf $BACKUP_FILE \
-        /etc/x-ui/ \
-        /usr/local/x-ui/db/ \
-        2>/dev/null
-
-    if [[ -f $BACKUP_FILE ]]; then
-        echo -e "${GREEN}[OK] ব্যাকআপ সংরক্ষিত: $BACKUP_FILE${NC}"
+show_configs() {
+    echo ""
+    if [[ -f /root/vpn-configs.txt ]]; then
+        cat /root/vpn-configs.txt
     else
-        echo -e "${RED}[ERROR] ব্যাকআপ ব্যর্থ হয়েছে${NC}"
+        warn "কোনো Config ফাইল নেই। ইনস্টল করুন: bash install.sh"
     fi
 }
 
-restore_panel() {
-    echo -e "${YELLOW}ব্যাকআপ ফাইলের পথ লিখুন:${NC}"
-    read -r BACKUP_FILE
-    if [[ -f $BACKUP_FILE ]]; then
-        systemctl stop x-ui
-        tar -xzf $BACKUP_FILE -C /
-        systemctl start x-ui
-        echo -e "${GREEN}[OK] রিস্টোর সম্পন্ন${NC}"
-    else
-        echo -e "${RED}[ERROR] ফাইল পাওয়া যায়নি${NC}"
-    fi
+list_inbounds() {
+    info "Panel Login হচ্ছে..."
+    if ! do_login; then err "Login ব্যর্থ!"; return; fi
+
+    curl -s -b "$COOKIE" "${PANEL_BASE}/xui/inbound/list" | python3 -c "
+import json,sys
+data=json.load(sys.stdin)
+items=data.get('obj',[])
+print(f'\n  মোট Inbound: {len(items)}\n')
+for i,o in enumerate(items,1):
+    st='✅' if o.get('enable') else '❌'
+    print(f'  {st} [{i}] {o.get(\"remark\",\"?\"):25} | {o.get(\"protocol\",\"?\"):12} | Port: {o.get(\"port\",\"?\")}')
+print()
+" 2>/dev/null
 }
 
-show_statistics() {
-    echo -e "${BLUE}=== X-UI ইনবাউন্ড পরিসংখ্যান ===${NC}"
-    x-ui status 2>/dev/null
-    echo ""
-    if [[ -f /usr/local/x-ui/db/x-ui.db ]]; then
-        echo -e "${CYAN}Database: /usr/local/x-ui/db/x-ui.db${NC}"
-        ls -lh /usr/local/x-ui/db/x-ui.db
-    fi
-}
-
-optimize_system() {
-    echo -e "${BLUE}[INFO] সিস্টেম অপটিমাইজ করা হচ্ছে...${NC}"
-    sysctl -p /etc/sysctl.conf > /dev/null 2>&1
-    # Enable BBR
-    modprobe tcp_bbr 2>/dev/null
-    echo "tcp_bbr" >> /etc/modules-load.d/modules.conf 2>/dev/null
-    BBR_STATUS=$(sysctl net.ipv4.tcp_congestion_control 2>/dev/null)
-    echo -e "${GREEN}[OK] $BBR_STATUS${NC}"
-    echo -e "${GREEN}[OK] অপটিমাইজেশন সম্পন্ন${NC}"
+backup() {
+    FILE="/root/xui-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
+    tar -czf "$FILE" /etc/x-ui/ /usr/local/x-ui/db/ 2>/dev/null
+    [[ -f "$FILE" ]] && ok "ব্যাকআপ সংরক্ষিত: $FILE" || err "ব্যাকআপ ব্যর্থ"
 }
 
 change_port() {
-    echo -e "${YELLOW}নতুন Panel পোর্ট লিখুন (1024-65535):${NC}"
-    read -r NEW_PORT
-    if [[ $NEW_PORT -ge 1024 && $NEW_PORT -le 65535 ]]; then
-        x-ui setting -port $NEW_PORT 2>/dev/null
-        systemctl restart x-ui
-        # Update firewall
-        ufw allow $NEW_PORT/tcp 2>/dev/null
-        echo -e "${GREEN}[OK] পোর্ট পরিবর্তন হয়েছে: $NEW_PORT${NC}"
-        SERVER_IP=$(curl -s ifconfig.me)
-        echo -e "${CYAN}নতুন URL: http://$SERVER_IP:$NEW_PORT${NC}"
-    else
-        echo -e "${RED}[ERROR] অবৈধ পোর্ট নম্বর${NC}"
-    fi
+    echo -e "${Y}নতুন Port (1024-65535):${N}"; read -r P
+    [[ $P -ge 1024 && $P -le 65535 ]] || { err "অবৈধ পোর্ট"; return; }
+    x-ui setting -port "$P" && systemctl restart x-ui
+    ufw allow "$P"/tcp >> /dev/null 2>&1
+    ok "Port পরিবর্তন হয়েছে: $P"
 }
 
-change_password() {
-    echo -e "${YELLOW}নতুন ইউজারনেম লিখুন:${NC}"
-    read -r NEW_USER
-    echo -e "${YELLOW}নতুন পাসওয়ার্ড লিখুন:${NC}"
-    read -rs NEW_PASS
+change_pass() {
+    echo -e "${Y}নতুন Username:${N}"; read -r U
+    echo -e "${Y}নতুন Password:${N}"; read -rs P; echo ""
+    x-ui setting -username "$U" -password "$P" && systemctl restart x-ui
+    ok "Login তথ্য আপডেট হয়েছে"
+}
+
+system_info() {
     echo ""
-    x-ui setting -username $NEW_USER -password $NEW_PASS 2>/dev/null
-    systemctl restart x-ui
-    echo -e "${GREEN}[OK] লগইন তথ্য আপডেট হয়েছে${NC}"
+    echo -e "${C}  ── সিস্টেম তথ্য ──${N}"
+    echo "  OS       : $(cat /etc/os-release | grep PRETTY | cut -d'"' -f2)"
+    echo "  Kernel   : $(uname -r)"
+    echo "  CPU      : $(nproc) Core(s)"
+    echo "  RAM      : $(free -h | awk '/Mem/{print $3"/"$2}')"
+    echo "  Disk     : $(df -h / | awk 'NR==2{print $3"/"$2" ("$5")"}')"
+    echo "  BBR      : $(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | awk '{print $3}')"
+    echo "  X-UI     : $(systemctl is-active x-ui)"
+    echo "  Uptime   : $(uptime -p)"
+    echo ""
 }
 
-# Main
+# ── Main Loop ────────────────────────────────────────────────────
+[[ $EUID -ne 0 ]] && err "Root হিসেবে চালান!" && exit 1
+
 while true; do
-    show_menu
-    echo -e "${WHITE}আপনার পছন্দ লিখুন [0-12]:${NC}"
-    read -r CHOICE
-
-    case $CHOICE in
-        1) start_panel ;;
-        2) stop_panel ;;
-        3) restart_panel ;;
-        4) status_panel ;;
-        5) update_panel ;;
-        6) uninstall_panel ;;
-        7) backup_panel ;;
-        8) restore_panel ;;
-        9) show_statistics ;;
-        10) optimize_system ;;
-        11) change_port ;;
-        12) change_password ;;
-        0) echo -e "${GREEN}ধন্যবাদ!${NC}"; exit 0 ;;
-        *) echo -e "${RED}অবৈধ পছন্দ!${NC}" ;;
+    menu
+    echo -e "${W}পছন্দ লিখুন [0-12]:${N}"
+    read -r CH
+    echo ""
+    case $CH in
+        1)  systemctl start   x-ui && ok "Panel চালু হয়েছে" ;;
+        2)  systemctl stop    x-ui && ok "Panel বন্ধ হয়েছে" ;;
+        3)  systemctl restart x-ui && ok "Panel রিস্টার্ট হয়েছে" ;;
+        4)  systemctl status  x-ui --no-pager ;;
+        5)  x-ui update 2>/dev/null || bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh) ;;
+        6)  add_user ;;
+        7)  show_configs ;;
+        8)  list_inbounds ;;
+        9)  backup ;;
+        10) change_port ;;
+        11) change_pass ;;
+        12) system_info ;;
+        0)  echo -e "${G}ধন্যবাদ!${N}"; exit 0 ;;
+        *)  err "অবৈধ পছন্দ!" ;;
     esac
-
-    echo -e "\n${YELLOW}এন্টার চাপুন মেনুতে ফিরে যেতে...${NC}"
+    echo ""
+    echo -e "${Y}  Enter চাপুন মেনুতে ফিরতে...${N}"
     read -r
 done
