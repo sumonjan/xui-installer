@@ -61,3 +61,4 @@ bash ssl.sh
 ```bash
 bash manage.sh
 ```
+apt-get update -y && apt-get install -y socat
